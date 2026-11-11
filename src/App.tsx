@@ -310,59 +310,82 @@ export default function App() {
     };
   }, [transactions, categories]);
 
-  // Handle OCR receipt upload simulation
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setScannedImage(reader.result);
-        triggerReceiptAnalysis();
-      };
-      reader.readAsDataURL(file);
+  // Real OCR receipt upload using Tesseract.js & Mandiri Regex Parser
+  const handleFileUpload = async (e: any) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Show image preview immediately
+    const reader = new FileReader();
+    reader.onload = () => {
+      setScannedImage(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+
+    setIsAnalyzing(true);
+    setScanStep('preview');
+
+    try {
+      // 1. Extract text from uploaded image
+      const { data: { text } } = await Tesseract.recognize(file, 'ind+eng', {
+        logger: (m) => console.log(m.status, m.progress),
+      });
+
+      console.log('--- OCR RAW TEXT ---', text);
+
+      // 2. Parse details using the Mandiri format parser
+      const parsedData = parseLivinReceipt(text, currentUser);
+
+      setExtractedData(parsedData);
+      setScanStep('reviewed');
+      showNotification(`Scanned: ${parsedData.title} (Rp ${parsedData.total.toLocaleString('id-ID')})`);
+    } catch (err) {
+      console.error('OCR Error:', err);
+      // Fallback if image resolution or blur prevents recognition
+      setExtractedData({
+        refNo: `MAN-${Date.now().toString().slice(-6)}`,
+        title: 'Pengeluaran Mandiri',
+        recipient: 'Penerima Transfer',
+        amount: 0,
+        fee: 0,
+        total: 0,
+        payer: currentUser,
+        category: 'dining',
+        date: new Date().toISOString(),
+        source: 'Livin by Mandiri',
+        notes: 'Periksa kembali nilai nominal'
+      });
+      setScanStep('reviewed');
+      showNotification('Gagal membaca gambar secara otomatis. Silakan cek data.');
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
-  // Simulated OCR trigger tailored for Livin' by Mandiri receipt
+  // Demo shortcut button
   const triggerReceiptAnalysis = (customTemplate = 'livin') => {
     setIsAnalyzing(true);
     setScanStep('preview');
 
     setTimeout(() => {
       setIsAnalyzing(false);
-      if (customTemplate === 'livin') {
-        setExtractedData({
-          refNo: '20261106BMRIIDJA01000223809759',
-          title: 'Jemput Nadya Oktober 2026',
-          recipient: 'JUNAIDI HUSEIN (BCA)',
-          amount: 650000,
-          fee: 2500,
-          total: 652500,
-          payer: currentUser,
-          category: 'transport',
-          date: '2026-11-06T06:16:02',
-          source: 'Livin by Mandiri',
-          notes: 'Auto-extracted from Bank Mandiri Transfer Confirmation'
-        });
-      } else {
-        setExtractedData({
-          refNo: `QRIS-${Date.now().toString().slice(-8)}`,
-          title: 'Daily Market Purchase',
-          recipient: 'Pasar Modern Fresh',
-          amount: 285000,
-          fee: 0,
-          total: 285000,
-          payer: currentUser,
-          category: 'groceries',
-          date: new Date().toISOString(),
-          source: 'QRIS Transfer',
-          notes: 'Fresh veggies and meat'
-        });
-      }
+      setExtractedData({
+        refNo: '611112380519',
+        title: 'Kopi Reman Dhawa',
+        recipient: 'Kopi Reman Dhawa',
+        amount: 20000,
+        fee: 0,
+        total: 20000,
+        payer: currentUser,
+        category: 'dining',
+        date: new Date().toISOString(),
+        source: 'Livin QRIS',
+        notes: 'Scan QRIS Kopi'
+      });
       setScanStep('reviewed');
-    }, 1400);
+      showNotification('Loaded sample transaction');
+    }, 1000);
   };
-
   // Confirm Scanned Expense into Ledger
   const confirmScannedExpense = () => {
     if (!extractedData) return;
