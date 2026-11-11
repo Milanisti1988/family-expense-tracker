@@ -92,10 +92,25 @@ const INITIAL_TRANSACTIONS = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'ledger', 'scan', 'budget'
-  const [currentUser, setCurrentUser] = useState('Anom'); // 'Anom' or 'Wife'
-  const [transactions, setTransactions] = useState(INITIAL_TRANSACTIONS);
-  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [currentUser, setCurrentUser] = useState('Anom');
+  
+  // Persistent transactions & categories
+  const [transactions, setTransactions] = useState(() => {
+    const saved = localStorage.getItem('family_transactions');
+    return saved ? JSON.parse(saved) : INITIAL_TRANSACTIONS;
+  });
+  const [categories, setCategories] = useState(() => {
+    const saved = localStorage.getItem('family_categories');
+    return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
+  });
+
+  // Calculate dynamic total target from sum of categories
+  const totalMonthlyBudget = categories.reduce((sum: number, c: any) => sum + (Number(c.allocated) || 0), 0);
+
+  // Budget Editing States
+  const [isEditingBudget, setIsEditingBudget] = useState(false);
+  const [editCategoriesList, setEditCategoriesList] = useState(categories);
   
   // OCR Scan Simulator State
   const [scannedImage, setScannedImage] = useState(null);
@@ -451,19 +466,32 @@ export default function App() {
               </div>
 
               {/* Top Monthly Spending Categories */}
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                    <PieChart className="w-4 h-4 text-blue-400" />
-                    Category Allocation
-                  </h3>
-                  <button 
-                    onClick={() => setActiveTab('budget')} 
-                    className="text-xs text-blue-400 hover:text-blue-300 flex items-center font-medium"
-                  >
-                    Details <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                <PieChart className="w-4 h-4 text-blue-400" />
+                Category Allocation
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditCategoriesList(categories);
+                    setIsEditingBudget(true);
+                  }}
+                  className="text-xs bg-indigo-600/30 border border-indigo-500/50 hover:bg-indigo-600/50 text-indigo-300 font-medium px-2.5 py-1 rounded-lg transition-colors"
+                >
+                  ✎ Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('budget')}
+                  className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-0.5"
+                >
+                  Details <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
 
                 <div className="space-y-2.5">
                   {categories.slice(0, 4).map((cat) => {
@@ -1147,6 +1175,80 @@ export default function App() {
         </nav>
 
       </div>
-    </div>
+    {/* Edit Budget & Category Allocations Modal */}
+      {isEditingBudget && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-5 space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="text-base font-semibold text-white">Adjust Category Budgets</h3>
+                <p className="text-xs text-slate-400">Total monthly target updates automatically</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setIsEditingBudget(false)}
+                className="text-slate-400 hover:text-white text-lg px-2"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
+              {editCategoriesList.map((cat: any, idx: number) => (
+                <div key={cat.id || idx} className="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 flex items-center justify-between gap-3">
+                  <div className="truncate flex-1">
+                    <p className="text-xs font-medium text-white truncate">{cat.name}</p>
+                    <p className="text-[10px] text-slate-400">{cat.id}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 w-44">
+                    <span className="text-xs text-slate-400">Rp</span>
+                    <input
+                      type="number"
+                      step="50000"
+                      value={cat.allocated}
+                      onChange={(e) => {
+                        const val = Math.max(0, Number(e.target.value));
+                        const updated = [...editCategoriesList];
+                        updated[idx] = { ...updated[idx], allocated: val };
+                        setEditCategoriesList(updated);
+                      }}
+                      className="w-full bg-slate-900 border border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-right text-xs text-white font-mono outline-none"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+              <span className="text-xs text-slate-400 font-medium">New Total Budget:</span>
+              <span className="text-sm font-bold text-emerald-400 font-mono">
+                Rp {editCategoriesList.reduce((sum: number, c: any) => sum + (Number(c.allocated) || 0), 0).toLocaleString('id-ID')}
+              </span>
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setIsEditingBudget(false)}
+                className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCategories(editCategoriesList);
+                  localStorage.setItem('family_categories', JSON.stringify(editCategoriesList));
+                  setIsEditingBudget(false);
+                  showNotification('Monthly budget targets updated successfully!');
+                }}
+                className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-xl transition shadow-lg shadow-indigo-600/30"
+              >
+                Save Budget
+              </button>
+            </div>
+          </div>
+        </div>
+      )}</div>
   );
 }
