@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
+import Tesseract from 'tesseract.js';
 import { 
   Camera, Upload, Plus, Wallet, PieChart, Receipt, Users, 
   ArrowUpRight, CheckCircle2, AlertTriangle, ArrowRight, 
@@ -91,6 +92,118 @@ const INITIAL_TRANSACTIONS = [
   }
 ];
 
+// Specialized parser for Livin' by Mandiri formats: Transfer, QRIS, Bayar/VA, Top-up
+function parseLivinReceipt(ocrText: string, defaultUser: string) {
+  const lines = ocrText
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  const fullText = lines.join(' ');
+
+  // 1. Determine Transaction Type & Source
+  let source = "Livin' Transfer";
+  if (/QR\s*Bayar|QRIS/i.test(ocrText)) {
+    source = 'Livin QRIS';
+  } else if (/Top-up/i.test(ocrText)) {
+    source = 'Livin Top-up';
+  } else if (/Bayar\s*Pembayaran/i.test(ocrText) || /Penyedia\s*Jasa/i.test(ocrText)) {
+    source = 'Livin Bayar/VA';
+  }
+
+  // 2. Extract Recipient / Merchant / Provider
+  let recipient = 'Pengeluaran Mandiri';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^(Penerima|Penyedia\s*Jasa)$/i.test(line) && lines[i + 1]) {
+      recipient = lines[i + 1];
+      break;
+    }
+  }
+
+  // 3. Extract Amount (Priority: Total Transaksi -> Nominal Transfer -> Nominal)
+  const extractAmountFromMatch = (pattern: RegExp) => {
+    const match = ocrText.match(pattern);
+    if (match && match[1]) {
+      const clean = match[1].replace(/\./g, '').replace(/,/g, '').trim();
+      const num = parseInt(clean, 10);
+      return isNaN(num) ? 0 : num;
+    }
+    return 0;
+  };
+
+  let totalAmount = extractAmountFromMatch(/Total\s*Transaksi\s*(?:Rp\.?)?\s*([\d.,]+)/i);
+  let nominalAmount = extractAmountFromMatch(/Nominal(?:\s*Transfer|\s*Transaksi)?\s*(?:Rp\.?)?\s*([\d.,]+)/i);
+  let fee = extractAmountFromMatch(/Biaya\s*Transaksi\s*(?:Rp\.?)?\s*([\d.,]+)/i);
+
+  if (totalAmount === 0 && nominalAmount > 0) {
+    totalAmount = nominalAmount + fee;
+  }
+  if (nominalAmount === 0 && totalAmount > 0) {
+    nominalAmount = totalAmount - fee;
+  }
+
+  // Fallback scan for any Indonesian Rupiah figure
+  if (totalAmount === 0) {
+    const fallbackRp = ocrText.match(/Rp\s*([\d.,]+)/i);
+    if (fallbackRp) {
+      totalAmount = parseInt(fallbackRp[1].replace(/\./g, ''), 10) || 50000;
+      nominalAmount = totalAmount;
+    }
+  }
+
+  // 4. Extract Keterangan / Notes (e.g., "Jemput Nadya", "Lunasin CC", "Tambahan")
+  let notes = '';
+  for (let i = 0; i < lines.length; i++) {
+    if (/Keterangan\s*Transaksi/i.test(lines[i]) && lines[i + 1]) {
+      if (!lines[i + 1].toLowerCase().includes('biaya transaksi termasuk')) {
+        notes = lines[i + 1];
+      }
+      break;
+    }
+  }
+
+  // 5. Extract Reference Number
+  let refNo = 'MAN-' + Math.floor(100000 + Math.random() * 900000);
+  const refMatch = ocrText.match(/(?:No\.?\s*Ref(?:erensi)?(?:\s*QRIS|\s*BI\s*Fast)?|No\.?\s*Ref\.)\s*[:.]?\s*([A-Za-z0-9]+)/i);
+  if (refMatch && refMatch[1].length >= 6) {
+    refNo = refMatch[1];
+  }
+
+  // 6. Intelligent Category Mapping
+  let category = 'groceries';
+  const textToCheck = `${recipient} ${notes} ${fullText}`.toLowerCase();
+
+  if (textToCheck.includes('kopi') || textToCheck.includes('resto') || textToCheck.includes('cafe') || textToCheck.includes('makan') || textToCheck.includes('bakso') || textToCheck.includes('dhawa')) {
+    category = 'dining';
+  } else if (textToCheck.includes('jemput') || textToCheck.includes('sekolah') || textToCheck.includes('nadya') || textToCheck.includes('spp') || textToCheck.includes('les')) {
+    category = 'transport';
+  } else if (textToCheck.includes('tokopedia') || textToCheck.includes('pln') || textToCheck.includes('listrik') || textToCheck.includes('pdam') || textToCheck.includes('wifi') || textToCheck.includes('indihome')) {
+    category = 'bills';
+  } else if (textToCheck.includes('gopay') || textToCheck.includes('ovo') || textToCheck.includes('shopeepay') || textToCheck.includes('dana')) {
+    category = 'groceries';
+  }
+
+  // 7. Payer
+  let payer = defaultUser;
+  if (/IDA BAGUS ANOM/i.test(ocrText)) {
+    payer = 'Anom';
+  }
+
+  return {
+    source,
+    title: notes || recipient,
+    recipient,
+    amount: nominalAmount > 0 ? nominalAmount : totalAmount,
+    fee,
+    total: totalAmount > 0 ? totalAmount : 50000,
+    category,
+    payer,
+    date: new Date().toISOString(),
+    refNo,
+    notes: notes || `Scan dari ${source}`
+  };
+}
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [currentUser, setCurrentUser] = useState('Anom');
